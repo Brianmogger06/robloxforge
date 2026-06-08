@@ -164,23 +164,21 @@ args    = ["C:/Users/Efe/Desktop/robloxforge/codex/dist/server.js"]
 
 ---
 
-## Sprint 2 — what was built
+## Tool reference
 
-| Phase | Feature area | Tools added |
-|---|---|---|
-| 0 | Session isolation · protocol handshake · deploy script | — |
-| 1 | Project intelligence | `analyze_project`, `get_project_tree`, `find_scripts`, `dependency_graph`, `create_snapshot`, `diff_snapshot` … |
-| 2 | Build intelligence 2.0 | `generate_floorplan`, `build_building`, `build_structure`, `connect_rooms`, `list_room_presets` |
-| 3 | Style engine | `set_session_style`, `list_styles`, `apply_style_to_palette` |
-| 4 | VFX | `create_particle`, `create_fire`, `create_smoke`, `create_rain`, `camera_shake`, `screen_flash` |
-| 5 | Animation | `animate_door`, `animate_elevator`, `animate_npc`, `create_cutscene`, `create_timeline` |
-| 6 | UI intelligence | `create_hud`, `create_menu`, `create_shop_ui`, `create_tycoon_ui`, `create_inventory_ui` |
-| 7 | NPC intelligence | `create_npc`, `patrol_behavior`, `chase_behavior`, `guard_behavior`, `create_behavior_tree` |
-| 8 | Gameplay systems | `create_currency_system`, `create_upgrade_system`, `create_quest_system`, `create_round_system`, `create_progression_system` |
-| 9 | Reference intelligence | `classify_style`, `classify_room`, `suggest_props`, `recognize_environment` |
-| 10 | Autonomous validation | `validate_build`, `validate_game`, `auto_fix`, `autonomous_iterate` |
-
-**177 smoke-test assertions across all 10 phases — 0 failures.**
+| Category | Tools |
+|---|---|
+| Project intel | `analyze_project`, `get_project_tree`, `find_scripts`, `get_script_source`, `dependency_graph`, `create_snapshot`, `diff_snapshot` |
+| Build | `generate_floorplan`, `build_building`, `build_structure`, `build_room`, `build_corridor`, `connect_rooms` |
+| Style | `set_session_style`, `get_session_style`, `list_styles`, `apply_style_to_palette` |
+| VFX | `create_particle`, `create_fire`, `create_smoke`, `create_rain`, `create_snow`, `camera_shake`, `screen_flash` |
+| Animation | `animate_door`, `animate_elevator`, `animate_npc`, `create_cutscene`, `create_timeline` |
+| UI | `create_hud`, `create_menu`, `create_shop_ui`, `create_tycoon_ui`, `create_inventory_ui` |
+| NPC | `create_npc`, `patrol_behavior`, `chase_behavior`, `guard_behavior`, `create_behavior_tree` |
+| Gameplay | `create_currency_system`, `create_upgrade_system`, `create_quest_system`, `create_round_system`, `create_progression_system` |
+| Image intel | `recognize_environment`, `classify_style`, `classify_room`, `suggest_props` |
+| Validation | `validate_build`, `validate_game`, `auto_fix`, `autonomous_iterate` |
+| Memory | `append_adr`, `append_changelog`, `get_roadmap`, `get_decisions` |
 
 ---
 
