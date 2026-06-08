@@ -1,0 +1,17 @@
+{
+  "port": 44755,
+  "projectRoot": "C:\\Users\\Efe\\Desktop\\yenioyun\\beastheist",
+  "enableBlindspotPlugin": false,
+  "autoWaypoint": true,
+  "rejectDefaultMaterials": true,
+  "logLevel": "info",
+  "palette": {
+    "bgVoid":       { "r": 10,  "g": 12,  "b": 16  },
+    "bgPanel":      { "r": 21,  "g": 24,  "b": 30  },
+    "textPrimary":  { "r": 154, "g": 168, "b": 144 },
+    "textDim":      { "r": 90,  "g": 98,  "b": 88  },
+    "textWarning":  { "r": 200, "g": 158, "b": 84  },
+    "textHazard":   { "r": 138, "g": 58,  "b": 58  },
+    "terminalText": { "r": 120, "g": 240, "b": 130 }
+  }
+}

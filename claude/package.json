@@ -1,0 +1,23 @@
+{
+  "name": "robloxforge",
+  "version": "0.1.0",
+  "description": "MCP server for Roblox Studio — fast batch builds, guaranteed persistence, built-in verification",
+  "type": "module",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/server.js",
+    "dev": "tsx src/server.ts",
+    "deploy:plugin": "tsx scripts/deploy-plugin.ts"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.12.0",
+    "express": "^4.19.2",
+    "sharp": "^0.34.5"
+  },
+  "devDependencies": {
+    "@types/express": "^4.17.21",
+    "@types/node": "^20.14.0",
+    "tsx": "^4.15.7",
+    "typescript": "^5.5.2"
+  }
+}

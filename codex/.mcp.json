@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "robloxforge": {
+      "command": "node",
+      "args": ["C:/Users/Efe/Desktop/robloxforge/codex/dist/server.js"]
+    }
+  }
+}
