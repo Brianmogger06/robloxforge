@@ -932,27 +932,26 @@ function tools.build_composite(args)
 		-- Clearance check: use position/size from args directly, not from getByPath.
 		-- This makes collision detection reliable even when getByPath has timing issues
 		-- with incrementally-built models.
+		local skip = false
 		if doCheck and partArgs.position and partArgs.size then
 			local cPos  = parseV3(partArgs.position)
 			local cSize = parseV3(partArgs.size)
 			local cHalf = cSize / 2
 			local cMin  = cPos - cHalf
 			local cMax  = cPos + cHalf
-			local collides = false
 			for _, bounds in ipairs(placedBounds) do
 				local bHalf = bounds.size / 2
 				if aabbOverlap(cMin, cMax, bounds.center - bHalf, bounds.center + bHalf) then
-					collides = true
+					skip = true
 					break
 				end
 			end
-			if collides then
+			if skip then
 				table.insert(rejected, { index = i, reason = "clearance" })
-				goto continue
 			end
 		end
 
-		do
+		if not skip then
 			local result = tools.create_part(partArgs)
 			if result.ok then
 				table.insert(created, result.data.path)
@@ -969,7 +968,6 @@ function tools.build_composite(args)
 				if inst then table.insert(partInstances, inst) end
 			end
 		end
-		::continue::
 	end
 
 	local primary = partInstances[args.primaryPartIndex or 1]
