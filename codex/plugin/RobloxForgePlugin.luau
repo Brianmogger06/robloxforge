@@ -13,10 +13,35 @@ local HttpService       = game:GetService("HttpService")
 local ChangeHistory     = game:GetService("ChangeHistoryService")
 local CollectionService = game:GetService("CollectionService")
 local LogService        = game:GetService("LogService")
+local RunService        = game:GetService("RunService")
 
 local BASE_URL         = "http://127.0.0.1:44755"
 local BACKOFF          = 3
 local PROTOCOL_VERSION = 1
+
+print("[RobloxForge] Plugin loaded — booting…")
+
+-- ─── Live state (GUI + transport share this) ─────────────────────────────────
+
+local state = {
+	running      = true,
+	connected    = false,
+	lastPollAt   = 0,
+	lastCmdAt    = 0,
+	lastCmdTool  = "",
+	lastError    = "",
+	pollCount    = 0,
+	cmdCount     = 0,
+	postFailures = 0,
+	recent       = {},
+}
+
+local RECENT_MAX = 12
+
+local function stateAddRecent(tool, ok, errMsg)
+	table.insert(state.recent, 1, { t = os.time(), tool = tool, ok = ok, err = errMsg or "" })
+	if #state.recent > RECENT_MAX then state.recent[#state.recent] = nil end
+end
 
 -- ─── Log capture ─────────────────────────────────────────────────────────────
 
@@ -907,27 +932,26 @@ function tools.build_composite(args)
 		-- Clearance check: use position/size from args directly, not from getByPath.
 		-- This makes collision detection reliable even when getByPath has timing issues
 		-- with incrementally-built models.
+		local skip = false
 		if doCheck and partArgs.position and partArgs.size then
 			local cPos  = parseV3(partArgs.position)
 			local cSize = parseV3(partArgs.size)
 			local cHalf = cSize / 2
 			local cMin  = cPos - cHalf
 			local cMax  = cPos + cHalf
-			local collides = false
 			for _, bounds in ipairs(placedBounds) do
 				local bHalf = bounds.size / 2
 				if aabbOverlap(cMin, cMax, bounds.center - bHalf, bounds.center + bHalf) then
-					collides = true
+					skip = true
 					break
 				end
 			end
-			if collides then
+			if skip then
 				table.insert(rejected, { index = i, reason = "clearance" })
-				goto continue
 			end
 		end
 
-		do
+		if not skip then
 			local result = tools.create_part(partArgs)
 			if result.ok then
 				table.insert(created, result.data.path)
@@ -944,7 +968,6 @@ function tools.build_composite(args)
 				if inst then table.insert(partInstances, inst) end
 			end
 		end
-		::continue::
 	end
 
 	local primary = partInstances[args.primaryPartIndex or 1]
@@ -1759,46 +1782,392 @@ end
 
 local function postResult(result)
 	local body
-	local ok, err = pcall(function() body = HttpService:JSONEncode(result) end)
-	if not ok then warn("[RobloxForge] Encode error: " .. tostring(err)); return end
-	pcall(function()
+	local encOk, encErr = pcall(function() body = HttpService:JSONEncode(result) end)
+	if not encOk then warn("[RobloxForge] Encode error: " .. tostring(encErr)); return end
+	local postOk, postErr = pcall(function()
 		HttpService:RequestAsync({
 			Url = BASE_URL .. "/result", Method = "POST",
 			Headers = { ["Content-Type"] = "application/json" }, Body = body,
 		})
 	end)
-end
-
-local function pollLoop()
-	print("[RobloxForge] Plugin v5 (Phase 1 Quality Push) started — polling " .. BASE_URL)
-	while true do
-		local ok, response = pcall(function()
-			return HttpService:RequestAsync({ Url = BASE_URL .. "/poll", Method = "GET" })
-		end)
-		if not ok then
-			warn("[RobloxForge] Poll error: " .. tostring(response) .. " — retry in " .. BACKOFF .. "s")
-			task.wait(BACKOFF)
-		elseif response.StatusCode == 200 then
-			local decOk, cmd = pcall(HttpService.JSONDecode, HttpService, response.Body)
-			if decOk and type(cmd) == "table" and cmd.id then
-				if cmd.protocolVersion ~= PROTOCOL_VERSION then
-					postResult({ id = cmd.id, ok = false, error = string.format(
-						"[RobloxForge] Protocol version mismatch: plugin=%d server=%d — redeploy the plugin.",
-						PROTOCOL_VERSION, tostring(cmd.protocolVersion)
-					)})
-				else
-					postResult(executeCommand(cmd))
-				end
-			else
-				warn("[RobloxForge] Malformed command")
-			end
-		elseif response.StatusCode == 204 then
-			-- long-poll timeout, re-poll immediately
-		else
-			warn("[RobloxForge] Unexpected status: " .. tostring(response.StatusCode))
-			task.wait(1)
-		end
+	if not postOk then
+		state.postFailures += 1
+		warn("[RobloxForge] POST /result failed: " .. tostring(postErr))
 	end
 end
 
-task.spawn(pollLoop)
+local function spawnPollLoop()
+	state.running = true
+	task.spawn(function()
+		print("[RobloxForge] Poll loop started — " .. BASE_URL)
+		while state.running do
+			local ok, response = pcall(function()
+				return HttpService:RequestAsync({ Url = BASE_URL .. "/poll", Method = "GET" })
+			end)
+			if not ok then
+				state.connected = false
+				state.lastError  = tostring(response)
+				warn("[RobloxForge] Poll error: " .. tostring(response) .. " — retry in " .. BACKOFF .. "s")
+				task.wait(BACKOFF)
+			elseif not response.Success then
+				state.connected = false
+				state.lastError  = "HTTP " .. tostring(response.StatusCode) .. ": " .. (response.Body or ""):sub(1, 200)
+				warn("[RobloxForge] Poll HTTP error: " .. state.lastError .. " — retry in " .. BACKOFF .. "s")
+				task.wait(BACKOFF)
+			elseif response.StatusCode == 200 then
+				state.connected  = true
+				state.lastPollAt = os.time()
+				state.pollCount += 1
+				local decOk, cmd = pcall(HttpService.JSONDecode, HttpService, response.Body)
+				if decOk and type(cmd) == "table" and cmd.id then
+					if cmd.protocolVersion ~= PROTOCOL_VERSION then
+						postResult({ id = cmd.id, ok = false, error = string.format(
+							"[RobloxForge] Protocol version mismatch: plugin=%d server=%d — redeploy the plugin.",
+							PROTOCOL_VERSION, cmd.protocolVersion
+						)})
+						stateAddRecent("version_mismatch", false, "protocol mismatch")
+					else
+						local res = executeCommand(cmd)
+						postResult(res)
+						state.lastCmdAt   = os.time()
+						state.lastCmdTool = cmd.tool or "?"
+						state.cmdCount   += 1
+						stateAddRecent(cmd.tool or "?", res.ok == true, res.error)
+					end
+				else
+					warn("[RobloxForge] Malformed command body: " .. (response.Body or ""):sub(1, 200))
+				end
+			elseif response.StatusCode == 204 then
+				state.connected  = true
+				state.lastPollAt = os.time()
+				state.pollCount += 1
+			else
+				state.connected = false
+				state.lastError  = "Unexpected status " .. tostring(response.StatusCode)
+				warn("[RobloxForge] " .. state.lastError)
+				task.wait(1)
+			end
+		end
+		print("[RobloxForge] Poll loop stopped.")
+	end)
+end
+
+-- ─── Studio GUI ──────────────────────────────────────────────────────────────
+
+local repaintConn = nil  -- declared here so Unloading handler can reach it
+
+local guiOk, guiErr = pcall(function()
+
+local C = {
+	bgVoid      = Color3.fromRGB(10,  12,  16),
+	bgPanel     = Color3.fromRGB(21,  24,  30),
+	primary     = Color3.fromRGB(154, 168, 144),
+	dim         = Color3.fromRGB(90,  98,  88),
+	warning     = Color3.fromRGB(200, 158, 84),
+	hazard      = Color3.fromRGB(138, 58,  58),
+	terminal    = Color3.fromRGB(120, 240, 130),
+	btnBg       = Color3.fromRGB(35,  40,  48),
+	btnBgHover  = Color3.fromRGB(50,  58,  68),
+}
+
+local toolbar = plugin:CreateToolbar("RobloxForge")
+local toggleBtn = toolbar:CreateButton(
+	"Console",
+	"Show / hide RobloxForge status console",
+	"rbxasset://textures/ui/InspectMenu/scripts.png"
+)
+toggleBtn.ClickableWhenViewportHidden = true
+
+local widgetInfo = DockWidgetPluginGuiInfo.new(
+	Enum.InitialDockState.Right, false, false, 360, 480, 280, 360
+)
+local widget = plugin:CreateDockWidgetPluginGui("RobloxForgeConsole", widgetInfo)
+widget.Title = "RobloxForge Console"
+
+-- restore open state
+local savedOpen = plugin:GetSetting("consoleOpen")
+if savedOpen == true then
+	widget.Enabled = true
+	toggleBtn:SetActive(true)
+end
+
+toggleBtn.Click:Connect(function()
+	widget.Enabled = not widget.Enabled
+	toggleBtn:SetActive(widget.Enabled)
+	plugin:SetSetting("consoleOpen", widget.Enabled)
+end)
+
+-- ── Build widget layout ───────────────────────────────────────────────────────
+
+local root = Instance.new("Frame")
+root.Size            = UDim2.fromScale(1, 1)
+root.BackgroundColor3 = C.bgVoid
+root.BorderSizePixel = 0
+root.Parent          = widget
+
+local rootLayout = Instance.new("UIListLayout")
+rootLayout.FillDirection  = Enum.FillDirection.Vertical
+rootLayout.SortOrder      = Enum.SortOrder.LayoutOrder
+rootLayout.Padding        = UDim.new(0, 4)
+rootLayout.Parent         = root
+
+local rootPad = Instance.new("UIPadding")
+rootPad.PaddingTop    = UDim.new(0, 8)
+rootPad.PaddingBottom = UDim.new(0, 8)
+rootPad.PaddingLeft   = UDim.new(0, 10)
+rootPad.PaddingRight  = UDim.new(0, 10)
+rootPad.Parent        = root
+
+-- helper: make a TextLabel
+local function makeLabel(parent, text, color, size, lo)
+	local lbl = Instance.new("TextLabel")
+	lbl.BackgroundTransparency = 1
+	lbl.TextXAlignment = Enum.TextXAlignment.Left
+	lbl.Font           = Enum.Font.Code
+	lbl.TextSize       = size or 13
+	lbl.TextColor3     = color or C.primary
+	lbl.Text           = text
+	lbl.Size           = UDim2.new(1, 0, 0, (size or 13) + 4)
+	lbl.AutomaticSize  = Enum.AutomaticSize.Y
+	lbl.LayoutOrder    = lo or 0
+	lbl.TextWrapped    = false
+	lbl.ClipsDescendants = false
+	lbl.Parent         = parent
+	return lbl
+end
+
+-- helper: make a small button
+local function makeButton(parent, text, lo, onClick)
+	local btn = Instance.new("TextButton")
+	btn.BackgroundColor3 = C.btnBg
+	btn.BorderSizePixel  = 0
+	btn.Font             = Enum.Font.Code
+	btn.TextSize         = 12
+	btn.TextColor3       = C.primary
+	btn.Text             = text
+	btn.Size             = UDim2.new(0, 90, 0, 22)
+	btn.LayoutOrder      = lo or 0
+	btn.AutoButtonColor  = false
+	local corner = Instance.new("UICorner"); corner.CornerRadius = UDim.new(0, 3); corner.Parent = btn
+	btn.MouseEnter:Connect(function()  btn.BackgroundColor3 = C.btnBgHover end)
+	btn.MouseLeave:Connect(function()  btn.BackgroundColor3 = C.btnBg end)
+	btn.MouseButton1Click:Connect(onClick)
+	btn.Parent = parent
+	return btn
+end
+
+-- ── Status row (dot + text + time) ───────────────────────────────────────────
+
+local statusRow = Instance.new("Frame")
+statusRow.BackgroundTransparency = 1
+statusRow.Size        = UDim2.new(1, 0, 0, 20)
+statusRow.LayoutOrder = 1
+statusRow.Parent      = root
+
+local statusLayout = Instance.new("UIListLayout")
+statusLayout.FillDirection = Enum.FillDirection.Horizontal
+statusLayout.VerticalAlignment = Enum.VerticalAlignment.Center
+statusLayout.Padding   = UDim.new(0, 6)
+statusLayout.Parent    = statusRow
+
+local dot = Instance.new("Frame")
+dot.Size              = UDim2.new(0, 10, 0, 10)
+dot.BackgroundColor3  = C.hazard
+dot.BorderSizePixel   = 0
+local dotCorner = Instance.new("UICorner"); dotCorner.CornerRadius = UDim.new(1, 0); dotCorner.Parent = dot
+dot.Parent = statusRow
+
+local statusText = Instance.new("TextLabel")
+statusText.BackgroundTransparency = 1
+statusText.Font      = Enum.Font.Code
+statusText.TextSize  = 13
+statusText.TextColor3 = C.dim
+statusText.Text      = "BRIDGE: " .. BASE_URL
+statusText.Size      = UDim2.new(0, 200, 1, 0)
+statusText.TextXAlignment = Enum.TextXAlignment.Left
+statusText.Parent    = statusRow
+
+local timeText = Instance.new("TextLabel")
+timeText.BackgroundTransparency = 1
+timeText.Font       = Enum.Font.Code
+timeText.TextSize   = 11
+timeText.TextColor3 = C.dim
+timeText.Text       = "—"
+timeText.Size       = UDim2.new(1, 0, 1, 0)
+timeText.TextXAlignment = Enum.TextXAlignment.Right
+timeText.Parent     = statusRow
+
+-- ── Divider ───────────────────────────────────────────────────────────────────
+
+local div1 = Instance.new("Frame")
+div1.Size = UDim2.new(1, 0, 0, 1); div1.BackgroundColor3 = C.bgPanel; div1.BorderSizePixel = 0
+div1.LayoutOrder = 2; div1.Parent = root
+
+-- ── Stats row ────────────────────────────────────────────────────────────────
+
+local statsLabel = makeLabel(root, "polls: 0   cmds: 0   post-fail: 0", C.dim, 12, 3)
+
+-- ── Last command row ─────────────────────────────────────────────────────────
+
+local lastCmdLabel = makeLabel(root, "latest: —", C.dim, 12, 4)
+
+-- ── Divider ───────────────────────────────────────────────────────────────────
+
+local div2 = Instance.new("Frame")
+div2.Size = UDim2.new(1, 0, 0, 1); div2.BackgroundColor3 = C.bgPanel; div2.BorderSizePixel = 0
+div2.LayoutOrder = 5; div2.Parent = root
+
+-- ── Recent log (ScrollingFrame) ──────────────────────────────────────────────
+
+local logTitle = makeLabel(root, "RECENT COMMANDS", C.dim, 11, 6)
+
+local logFrame = Instance.new("ScrollingFrame")
+logFrame.Size                = UDim2.new(1, 0, 0, 200)
+logFrame.BackgroundColor3    = C.bgPanel
+logFrame.BorderSizePixel     = 0
+logFrame.ScrollBarThickness  = 4
+logFrame.ScrollBarImageColor3 = C.dim
+logFrame.CanvasSize          = UDim2.new(0, 0, 0, 0)
+logFrame.AutomaticCanvasSize = Enum.AutomaticSize.Y
+logFrame.LayoutOrder         = 7
+logFrame.Parent              = root
+
+local logLayout = Instance.new("UIListLayout")
+logLayout.SortOrder     = Enum.SortOrder.LayoutOrder
+logLayout.Padding       = UDim.new(0, 2)
+logLayout.Parent        = logFrame
+
+local logPad = Instance.new("UIPadding")
+logPad.PaddingLeft = UDim.new(0, 4); logPad.PaddingRight = UDim.new(0, 4)
+logPad.PaddingTop  = UDim.new(0, 4); logPad.Parent = logFrame
+
+local logRows = {}
+for i = 1, RECENT_MAX do
+	local row = Instance.new("TextLabel")
+	row.BackgroundTransparency = 1
+	row.Font       = Enum.Font.Code
+	row.TextSize   = 11
+	row.TextColor3 = C.dim
+	row.TextXAlignment = Enum.TextXAlignment.Left
+	row.Size       = UDim2.new(1, 0, 0, 14)
+	row.LayoutOrder = i
+	row.TextWrapped = false
+	row.Text        = ""
+	row.Parent      = logFrame
+	logRows[i]      = row
+end
+
+-- ── Divider ───────────────────────────────────────────────────────────────────
+
+local div3 = Instance.new("Frame")
+div3.Size = UDim2.new(1, 0, 0, 1); div3.BackgroundColor3 = C.bgPanel; div3.BorderSizePixel = 0
+div3.LayoutOrder = 8; div3.Parent = root
+
+-- ── Buttons row ──────────────────────────────────────────────────────────────
+
+local btnRow = Instance.new("Frame")
+btnRow.BackgroundTransparency = 1
+btnRow.Size        = UDim2.new(1, 0, 0, 28)
+btnRow.LayoutOrder = 9
+btnRow.Parent      = root
+
+local btnLayout = Instance.new("UIListLayout")
+btnLayout.FillDirection  = Enum.FillDirection.Horizontal
+btnLayout.VerticalAlignment = Enum.VerticalAlignment.Center
+btnLayout.Padding        = UDim.new(0, 6)
+btnLayout.Parent         = btnRow
+
+makeButton(btnRow, "⟳ Reconnect", 1, function()
+	state.running = false
+	task.wait(0.1)
+	spawnPollLoop()
+end)
+
+makeButton(btnRow, "✕ Clear log", 2, function()
+	state.recent = {}
+end)
+
+makeButton(btnRow, "⎘ Copy diag", 3, function()
+	local diag = string.format(
+		"connected=%s polls=%d cmds=%d postFail=%d lastError=%s lastTool=%s",
+		tostring(state.connected), state.pollCount, state.cmdCount,
+		state.postFailures, state.lastError, state.lastCmdTool
+	)
+	local ok = pcall(setclipboard, diag)
+	if not ok then print("[RobloxForge] Diagnostics:\n" .. diag) end
+end)
+
+-- ── Error label (shown when disconnected) ────────────────────────────────────
+
+local errorLabel = makeLabel(root, "", C.hazard, 11, 10)
+
+-- ── Repaint loop ─────────────────────────────────────────────────────────────
+
+local function fmtAge(t)
+	if t == 0 then return "—" end
+	local d = os.time() - t
+	if d < 60 then return d .. "s ago" end
+	return math.floor(d/60) .. "m ago"
+end
+
+local lastRepaint = 0
+repaintConn = RunService.Heartbeat:Connect(function()
+	local now = os.time()
+	if now - lastRepaint < 1 then return end  -- repaint at most every 1s (Heartbeat runs at 60 fps)
+	lastRepaint = now
+
+	-- status dot
+	dot.BackgroundColor3 = state.connected and C.terminal or C.hazard
+	timeText.Text = fmtAge(state.lastPollAt)
+
+	-- stats
+	statsLabel.Text = string.format("polls: %d   cmds: %d   post-fail: %d",
+		state.pollCount, state.cmdCount, state.postFailures)
+
+	-- last command
+	if state.cmdCount > 0 then
+		local age   = fmtAge(state.lastCmdAt)
+		local color = C.terminal
+		lastCmdLabel.TextColor3 = color
+		lastCmdLabel.Text = "latest: " .. state.lastCmdTool .. " ✓ " .. age
+	else
+		lastCmdLabel.TextColor3 = C.dim
+		lastCmdLabel.Text = "latest: —"
+	end
+
+	-- recent rows
+	for i, row in ipairs(logRows) do
+		local entry = state.recent[i]
+		if entry then
+			local ts = os.date("%H:%M:%S", entry.t)
+			local mark = entry.ok and "✓" or "✗"
+			row.Text       = string.format("[%s] %s %s", ts, entry.tool, mark)
+			row.TextColor3 = entry.ok and C.terminal or C.hazard
+		else
+			row.Text = ""
+		end
+	end
+
+	-- error / last error
+	if not state.connected and state.lastError ~= "" then
+		errorLabel.Text = "ERR: " .. state.lastError:sub(1, 80)
+	else
+		errorLabel.Text = ""
+	end
+end)
+
+end) -- end GUI pcall
+if not guiOk then
+	warn("[RobloxForge] GUI init failed (other plugins unaffected): " .. tostring(guiErr))
+end
+
+-- ─── Cleanup on unload ───────────────────────────────────────────────────────
+
+plugin.Unloading:Connect(function()
+	state.running = false
+	if repaintConn then repaintConn:Disconnect() end
+end)
+
+-- ─── Boot ────────────────────────────────────────────────────────────────────
+
+spawnPollLoop()

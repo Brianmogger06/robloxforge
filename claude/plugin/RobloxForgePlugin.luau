@@ -1854,6 +1854,10 @@ end
 
 -- ─── Studio GUI ──────────────────────────────────────────────────────────────
 
+local repaintConn = nil  -- declared here so Unloading handler can reach it
+
+local guiOk, guiErr = pcall(function()
+
 local C = {
 	bgVoid      = Color3.fromRGB(10,  12,  16),
 	bgPanel     = Color3.fromRGB(21,  24,  30),
@@ -1878,8 +1882,7 @@ local widgetInfo = DockWidgetPluginGuiInfo.new(
 	Enum.InitialDockState.Right, false, false, 360, 480, 280, 360
 )
 local widget = plugin:CreateDockWidgetPluginGui("RobloxForgeConsole", widgetInfo)
-widget.Title       = "RobloxForge Console"
-widget.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+widget.Title = "RobloxForge Console"
 
 -- restore open state
 local savedOpen = plugin:GetSetting("consoleOpen")
@@ -2108,7 +2111,7 @@ local function fmtAge(t)
 end
 
 local lastRepaint = 0
-local repaintConn = RunService.Heartbeat:Connect(function()
+repaintConn = RunService.Heartbeat:Connect(function()
 	local now = os.time()
 	if now - lastRepaint < 1 then return end  -- repaint at most every 1s (Heartbeat runs at 60 fps)
 	lastRepaint = now
@@ -2153,11 +2156,16 @@ local repaintConn = RunService.Heartbeat:Connect(function()
 	end
 end)
 
+end) -- end GUI pcall
+if not guiOk then
+	warn("[RobloxForge] GUI init failed (other plugins unaffected): " .. tostring(guiErr))
+end
+
 -- ─── Cleanup on unload ───────────────────────────────────────────────────────
 
 plugin.Unloading:Connect(function()
 	state.running = false
-	repaintConn:Disconnect()
+	if repaintConn then repaintConn:Disconnect() end
 end)
 
 -- ─── Boot ────────────────────────────────────────────────────────────────────

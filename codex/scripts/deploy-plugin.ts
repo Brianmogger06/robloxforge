@@ -12,7 +12,7 @@ if (!LOCALAPPDATA) {
 
 const src = join(__dirname, "..", "plugin", "RobloxForgePlugin.luau");
 const pluginsDir = join(LOCALAPPDATA, "Roblox", "Plugins");
-const dst = join(pluginsDir, "RobloxForgePlugin.luau");
+const dst = join(pluginsDir, "RobloxForgePlugin.lua");
 
 if (!existsSync(pluginsDir)) {
   mkdirSync(pluginsDir, { recursive: true });
