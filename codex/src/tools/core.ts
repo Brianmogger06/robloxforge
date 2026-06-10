@@ -20,6 +20,7 @@ import { planAutoFix, buildIterationAdr, type ValidationReport } from "../build/
 import { SCALE } from "../build/scale.js";
 import { type PaletteRole, getSessionColor, setSessionPalette, getSessionPalette, clearSessionPalette } from "../build/palette_session.js";
 import { planRoomContents, MIN_ROOM_DIM, type RoomContent, type RoomSpec } from "../build/composition.js";
+import { buildFacadeDefs, isFacadeGroup, resolveFacade, resolveBatchCmd } from "./facade.js";
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -91,7 +92,7 @@ function resolveColors(args: Record<string, unknown>, config: Config, sessionId 
 
 // ─── Tool definitions ─────────────────────────────────────────────────────────
 
-const TOOL_DEFS = [
+export const TOOL_DEFS = [
   // ── Escape-hatch ──────────────────────────────────────────────────────────
   {
     name: "execute_luau",
@@ -1370,7 +1371,8 @@ const SERVER_SIDE_TOOLS = new Set([
 ]);
 
 export function registerCoreTools(server: Server, bridge: HttpBridge, config: Config): void {
-  server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: TOOL_DEFS }));
+  const facadeDefs = buildFacadeDefs(TOOL_DEFS);
+  server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: facadeDefs }));
 
   const runServerSide = async (toolName: string, toolArgs: Record<string, unknown>, sessionId = "default"): Promise<{ content: Array<{ type: "text"; text: string }>; isError?: boolean }> => {
     const ok = (data: unknown) => ({ content: [{ type: "text" as const, text: JSON.stringify(data, null, 2) }] });
@@ -1723,8 +1725,27 @@ export function registerCoreTools(server: Server, bridge: HttpBridge, config: Co
   };
 
   server.setRequestHandler(CallToolRequestSchema, async (request) => {
-    const { name } = request.params;
-    const rawArgs = (request.params.arguments ?? {}) as Record<string, unknown>;
+    let name = request.params.name;
+    let rawArgs = (request.params.arguments ?? {}) as Record<string, unknown>;
+
+    // Facade resolution: grouped tools ({action, params}) → internal tool + flat args.
+    // Direct internal names still work, so batch sub-commands and old clients keep functioning.
+    if (isFacadeGroup(name)) {
+      const resolved = resolveFacade(name, rawArgs);
+      if ("error" in resolved) return { content: [{ type: "text" as const, text: resolved.error }], isError: true };
+      name = resolved.name;
+      rawArgs = resolved.args;
+    }
+    if (name === "batch") {
+      const cmds = (rawArgs["commands"] as Array<{ tool: string; args?: Record<string, unknown> }>) ?? [];
+      for (const cmd of cmds) {
+        const resolved = resolveBatchCmd(cmd.tool, cmd.args ?? {});
+        if ("error" in resolved) return { content: [{ type: "text" as const, text: `[batch] ${resolved.error}` }], isError: true };
+        cmd.tool = resolved.name;
+        cmd.args = resolved.args;
+      }
+    }
+
     const sessionId = (rawArgs["_sessionId"] as string | undefined) ?? "default";
     const args = resolveColors(rawArgs, config, sessionId);
 

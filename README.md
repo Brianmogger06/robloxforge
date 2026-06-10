@@ -166,19 +166,30 @@ args    = ["C:/Users/Efe/Desktop/robloxforge/codex/dist/server.js"]
 
 ## Tool reference
 
-| Category | Tools |
+RobloxForge exposes **14 tools**. Twelve are namespaced groups invoked as `{ action, params }` — over 100 operations behind a compact surface that keeps the model's context lean. Two are standalone: `execute_luau` (escape hatch) and `batch` (multi-command dispatch).
+
+| Tool | Actions |
 |---|---|
-| Project intel | `analyze_project`, `get_project_tree`, `find_scripts`, `get_script_source`, `dependency_graph`, `create_snapshot`, `diff_snapshot` |
-| Build | `generate_floorplan`, `build_building`, `build_structure`, `build_room`, `build_corridor`, `connect_rooms` |
-| Style | `set_session_style`, `get_session_style`, `list_styles`, `apply_style_to_palette` |
-| VFX | `create_particle`, `create_fire`, `create_smoke`, `create_rain`, `create_snow`, `camera_shake`, `screen_flash` |
-| Animation | `animate_door`, `animate_elevator`, `animate_npc`, `create_cutscene`, `create_timeline` |
-| UI | `create_hud`, `create_menu`, `create_shop_ui`, `create_tycoon_ui`, `create_inventory_ui` |
-| NPC | `create_npc`, `patrol_behavior`, `chase_behavior`, `guard_behavior`, `create_behavior_tree` |
-| Gameplay | `create_currency_system`, `create_upgrade_system`, `create_quest_system`, `create_round_system`, `create_progression_system` |
-| Image intel | `recognize_environment`, `classify_style`, `classify_room`, `suggest_props` |
-| Validation | `validate_build`, `validate_game`, `auto_fix`, `autonomous_iterate` |
-| Memory | `append_adr`, `append_changelog`, `get_roadmap`, `get_decisions` |
+| `forge_instance` | `create_part`, `create_instance`, `set_properties`, `set_properties_many`, `delete`, `clone`, `find`, `get_tree`, `get_properties`, `set_waypoint`, `save_place` |
+| `forge_build` | `room`, `corridor`, `doorway`, `composite`, `grid`, `populate_room`, `floorplan`, `building_kinds`, `structure`, `building`, `connect_rooms`, `room_presets` |
+| `forge_style` | `set_style`, `get_style`, `list_styles`, `style_to_palette`, `set_palette`, `get_palette`, `palette_from_image`, `extract_palette`, `attach_reference`, `image_to_grid` |
+| `forge_vfx` | `particle`, `fire`, `smoke`, `sparks`, `explosion`, `rain`, `snow`, `camera_shake`, `screen_flash`, `light`, `flicker`, `pulse` |
+| `forge_anim` | `animation`, `door`, `elevator`, `npc`, `cutscene`, `timeline` |
+| `forge_ui` | `custom`, `hud`, `menu`, `inventory`, `shop`, `tycoon`, `theme`, `analyze` |
+| `forge_npc` | `create`, `behavior_tree`, `patrol`, `guard`, `chase`, `interact` |
+| `forge_gameplay` | `currency`, `upgrade`, `quest`, `round`, `objective`, `progression` |
+| `forge_project` | `tree`, `stats`, `find_models`, `find_parts`, `find_scripts`, `script_source`, `search_scripts`, `remote_events`, `remote_functions`, `dependency_graph`, `analyze`, `snapshot`, `diff_snapshot`, `list_snapshots`, `analyze_self` |
+| `forge_validate` | `build`, `game`, `auto_fix`, `playtest`, `iterate`, `start_playtest`, `playtest_output`, `stop_playtest`, `console_output` |
+| `forge_vision` | `style`, `room`, `props`, `environment` |
+| `forge_memory` | `rules`, `decisions`, `adr`, `changelog`, `get_roadmap`, `update_roadmap` |
+
+Example call:
+
+```json
+{ "tool": "forge_vfx", "arguments": { "action": "fire", "params": { "target": "Workspace.Torch" } } }
+```
+
+`batch` accepts both internal names and dotted group form (`"forge_build.room"`).
 
 ---
 
