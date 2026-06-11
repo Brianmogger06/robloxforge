@@ -8,6 +8,8 @@ export interface RoomContent {
   preferredZone?: 'center' | 'perimeter' | 'corner';
   color?: string;
   material?: string;
+  /** Prop-assembly tag (e.g. "bunk_bed") — placed plans carry it so they can expand into multi-part furniture. */
+  tag?: string;
 }
 
 export interface PlacementPlan {
@@ -17,6 +19,8 @@ export interface PlacementPlan {
   color: string;
   material: string;
   name?: string;
+  tag?: string;
+  transparency?: number;
   rejected?: { reason: string };
 }
 
@@ -99,6 +103,7 @@ export function planRoomContents(
         color: item.color ?? '#c8a464',
         material: item.material ?? 'SmoothPlastic',
         name: item.name,
+        tag: item.tag,
       });
       continue;
     }
@@ -132,6 +137,7 @@ export function planRoomContents(
             color: item.color ?? '#808080',
             material: item.material ?? 'Concrete',
             name: item.name,
+            tag: item.tag,
           });
           placed_this = true;
           break outer;

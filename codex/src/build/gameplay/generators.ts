@@ -7,6 +7,47 @@ export interface GameplayModule {
 // All modules export { init(player), set(player, k, v), get(player, k) }
 // so Phase 10 validation can swap them uniformly.
 
+/**
+ * Shared persistence tail for DataStore-backed modules: retry wrapper,
+ * save on leave, BindToClose flush (the classic data-loss gap), and a
+ * 120 s autosave loop. `mapName` is the module's userId-keyed cache table.
+ */
+function persistenceLua(mapName: string): string {
+  return `
+-- Persistence: retried saves, leave/shutdown flush, periodic autosave
+local function dsRetry(fn: () -> ()): boolean
+	for attempt = 1, 3 do
+		local ok = pcall(fn)
+		if ok then return true end
+		if attempt < 3 then task.wait(attempt * 0.8) end
+	end
+	return false
+end
+
+local function saveOne(userId: number)
+	local data = ${mapName}[userId]
+	if data == nil then return end
+	dsRetry(function() DS:SetAsync(tostring(userId), data) end)
+end
+
+game:GetService("Players").PlayerRemoving:Connect(function(player)
+	saveOne(player.UserId)
+	${mapName}[player.UserId] = nil
+end)
+
+game:BindToClose(function()
+	for userId in pairs(${mapName}) do saveOne(userId) end
+end)
+
+task.spawn(function()
+	while true do
+		task.wait(120)
+		for userId in pairs(${mapName}) do saveOne(userId) end
+	end
+end)
+`;
+}
+
 export function generateCurrencySystem(options: {
   currencyName?: string;
   startAmount?: number;
@@ -26,7 +67,7 @@ local Players          = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local DS = DataStoreService:GetDataStore("${dsKey}")
-local cache: {[string]: number} = {}
+local cache: {[number]: number} = {}
 
 -- RemoteEvents
 local rf = Instance.new("RemoteFunction", ReplicatedStorage)
@@ -64,11 +105,7 @@ function M.init(player: Player)
 	rf.OnServerInvoke = function(p) return M.get(p) end
 end
 
-Players.PlayerRemoving:Connect(function(player)
-	pcall(function() DS:SetAsync(tostring(player.UserId), M.get(player)) end)
-	cache[player.UserId] = nil
-end)
-
+${persistenceLua("cache")}
 return M
 `,
   };
@@ -95,7 +132,7 @@ local ReplicatedStorage  = game:GetService("ReplicatedStorage")
 local DS = DataStoreService:GetDataStore("UpgradeData_v1")
 
 local UPGRADES = game:GetService("HttpService"):JSONDecode([==[${upgradeJson}]==])
-local cache: {[string]: {[string]: number}} = {}
+local cache: {[number]: {[string]: number}} = {}
 
 local re = Instance.new("RemoteEvent", ReplicatedStorage)
 re.Name = "BuyUpgrade"
@@ -132,7 +169,7 @@ re.OnServerEvent:Connect(function(player, upgradeId)
 		end
 	end
 end)
-
+${persistenceLua("cache")}
 return M
 `,
   };
@@ -156,7 +193,7 @@ local DataStoreService  = game:GetService("DataStoreService")
 local ReplicatedStorage  = game:GetService("ReplicatedStorage")
 local DS = DataStoreService:GetDataStore("QuestData_v1")
 local QUESTS = game:GetService("HttpService"):JSONDecode([==[${questJson}]==])
-local progress: {[string]: {[string]: number}} = {}
+local progress: {[number]: {[string]: number}} = {}
 
 local rf = Instance.new("RemoteFunction", ReplicatedStorage)
 rf.Name = "GetQuests"
@@ -190,7 +227,7 @@ function M.init(player: Player)
 		return result
 	end
 end
-
+${persistenceLua("progress")}
 return M
 `,
   };
@@ -274,7 +311,7 @@ local re = Instance.new("RemoteEvent", ReplicatedStorage)
 re.Name = "ObjectiveUpdate"
 local OBJECTIVES = ${JSON.stringify(objectives)}
 
-local completed: {[string]: {[string]: boolean}} = {}
+local completed: {[number]: {[string]: boolean}} = {}
 
 local M = {}
 
@@ -312,7 +349,7 @@ local ReplicatedStorage  = game:GetService("ReplicatedStorage")
 local DS = DataStoreService:GetDataStore("ProgressionData_v1")
 local XP_PER_LEVEL = ${xpPerLevel}
 local MAX_LEVEL    = ${maxLevel}
-local cache: {[string]: {xp: number, level: number}} = {}
+local cache: {[number]: {xp: number, level: number}} = {}
 local re = Instance.new("RemoteEvent", ReplicatedStorage)
 re.Name = "ProgressionUpdate"
 local rf = Instance.new("RemoteFunction", ReplicatedStorage)
@@ -346,7 +383,7 @@ function M.init(player: Player)
 	cache[player.UserId] = (ok and type(data) == "table" and data) or {xp=0,level=1}
 	rf.OnServerInvoke = function(p) return cache[p.UserId] or {xp=0,level=1} end
 end
-
+${persistenceLua("cache")}
 return M
 `,
   };

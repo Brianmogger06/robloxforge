@@ -726,29 +726,48 @@ function tools.build_room(args)
 	rp("Floor",   CFrame.new(0, -wt/2, 0),    Vector3.new(sx+2*wt, wt, sz+2*wt), fMat, fCol)
 	rp("Ceiling", CFrame.new(0, h+wt/2, 0),   Vector3.new(sx+2*wt, wt, sz+2*wt), cMat, cCol)
 
-	-- Wall builder — N/S walls extend along room X, thickness along Z
-	local function buildNS(wname, localCF, fullW, doorList)
-		if #doorList == 0 then
+	local windowMarkers = {}
+	local GLASS_COL = Color3.fromRGB(180, 208, 226)
+
+	-- Generic opening-aware wall builder. Openings: doors (sill=0) and windows
+	-- (sill>0, glass=true). Walls are segmented around openings; windows add a
+	-- sill piece below and a glass pane in the gap.
+	-- N/S walls extend along room X, thickness along Z
+	local function buildNS(wname, localCF, fullW, openings)
+		if #openings == 0 then
 			rp(wname, localCF, Vector3.new(fullW, h, wt), wMat, wCol); return
 		end
-		table.sort(doorList, function(a,b) return (a.offset or 0) < (b.offset or 0) end)
+		table.sort(openings, function(a,b) return (a.offset or 0) < (b.offset or 0) end)
 		local x = -fullW/2
-		for i, dw in ipairs(doorList) do
-			local dOff = dw.offset or 0
-			local dW   = dw.width  or 2
-			local dH   = dw.height or 3
-			local dL   = dOff - dW/2
-			local dR   = dOff + dW/2
+		for i, dw in ipairs(openings) do
+			local dOff  = dw.offset or 0
+			local dW    = dw.width  or 2
+			local dSill = dw.sill or 0
+			local dH    = dw.height or 3
+			if dSill + dH > h - 0.05 then dH = math.max(0.5, h - 0.05 - dSill) end
+			local dL = dOff - dW/2
+			local dR = dOff + dW/2
 			if dL > x + 0.01 then
 				local sw = dL - x
 				rp(wname.."_Seg"..i.."L", localCF * CFrame.new(x + sw/2, 0, 0), Vector3.new(sw, h, wt), wMat, wCol)
 			end
-			if dH < h - 0.01 then
-				local th = h - dH
-				rp(wname.."_Top"..i, localCF * CFrame.new(dOff, -h/2 + dH + th/2, 0), Vector3.new(dW, th, wt), wMat, wCol)
+			local topY0 = dSill + dH
+			if topY0 < h - 0.01 then
+				local th = h - topY0
+				rp(wname.."_Top"..i, localCF * CFrame.new(dOff, -h/2 + topY0 + th/2, 0), Vector3.new(dW, th, wt), wMat, wCol)
 			end
-			local dwCF = baseCF * localCF * CFrame.new(dOff, -h/2 + dH/2, 0)
-			table.insert(doorwayMarkers, { wall = wname, width = dW, height = dH, worldPosition = serialize(dwCF.Position) })
+			if dSill > 0.01 then
+				rp(wname.."_Sill"..i, localCF * CFrame.new(dOff, -h/2 + dSill/2, 0), Vector3.new(dW, dSill, wt), wMat, wCol)
+			end
+			local oCF = baseCF * localCF * CFrame.new(dOff, -h/2 + dSill + dH/2, 0)
+			if dw.glass then
+				local g = rp(wname.."_Glass"..i, localCF * CFrame.new(dOff, -h/2 + dSill + dH/2, 0), Vector3.new(dW, dH, wt * 0.35), "Glass", GLASS_COL)
+				g.Transparency = 0.45
+				g.CanCollide   = false
+				table.insert(windowMarkers, { wall = wname, width = dW, height = dH, sill = dSill, worldPosition = serialize(oCF.Position) })
+			else
+				table.insert(doorwayMarkers, { wall = wname, width = dW, height = dH, worldPosition = serialize(oCF.Position) })
+			end
 			x = dR
 		end
 		if x < fullW/2 - 0.01 then
@@ -757,29 +776,42 @@ function tools.build_room(args)
 		end
 	end
 
-	-- Wall builder — E/W walls extend along room Z, thickness along X
-	local function buildEW(wname, localCF, fullZ, doorList)
-		if #doorList == 0 then
+	-- E/W walls extend along room Z, thickness along X
+	local function buildEW(wname, localCF, fullZ, openings)
+		if #openings == 0 then
 			rp(wname, localCF, Vector3.new(wt, h, fullZ), wMat, wCol); return
 		end
-		table.sort(doorList, function(a,b) return (a.offset or 0) < (b.offset or 0) end)
+		table.sort(openings, function(a,b) return (a.offset or 0) < (b.offset or 0) end)
 		local z = -fullZ/2
-		for i, dw in ipairs(doorList) do
-			local dOff = dw.offset or 0
-			local dW   = dw.width  or 2
-			local dH   = dw.height or 3
-			local dL   = dOff - dW/2
-			local dR   = dOff + dW/2
+		for i, dw in ipairs(openings) do
+			local dOff  = dw.offset or 0
+			local dW    = dw.width  or 2
+			local dSill = dw.sill or 0
+			local dH    = dw.height or 3
+			if dSill + dH > h - 0.05 then dH = math.max(0.5, h - 0.05 - dSill) end
+			local dL = dOff - dW/2
+			local dR = dOff + dW/2
 			if dL > z + 0.01 then
 				local sw = dL - z
 				rp(wname.."_Seg"..i.."L", localCF * CFrame.new(0, 0, z + sw/2), Vector3.new(wt, h, sw), wMat, wCol)
 			end
-			if dH < h - 0.01 then
-				local th = h - dH
-				rp(wname.."_Top"..i, localCF * CFrame.new(0, -h/2 + dH + th/2, dOff), Vector3.new(wt, th, dW), wMat, wCol)
+			local topY0 = dSill + dH
+			if topY0 < h - 0.01 then
+				local th = h - topY0
+				rp(wname.."_Top"..i, localCF * CFrame.new(0, -h/2 + topY0 + th/2, dOff), Vector3.new(wt, th, dW), wMat, wCol)
 			end
-			local dwCF = baseCF * localCF * CFrame.new(0, -h/2 + dH/2, dOff)
-			table.insert(doorwayMarkers, { wall = wname, width = dW, height = dH, worldPosition = serialize(dwCF.Position) })
+			if dSill > 0.01 then
+				rp(wname.."_Sill"..i, localCF * CFrame.new(0, -h/2 + dSill/2, dOff), Vector3.new(wt, dSill, dW), wMat, wCol)
+			end
+			local oCF = baseCF * localCF * CFrame.new(0, -h/2 + dSill + dH/2, dOff)
+			if dw.glass then
+				local g = rp(wname.."_Glass"..i, localCF * CFrame.new(0, -h/2 + dSill + dH/2, dOff), Vector3.new(wt * 0.35, dH, dW), "Glass", GLASS_COL)
+				g.Transparency = 0.45
+				g.CanCollide   = false
+				table.insert(windowMarkers, { wall = wname, width = dW, height = dH, sill = dSill, worldPosition = serialize(oCF.Position) })
+			else
+				table.insert(doorwayMarkers, { wall = wname, width = dW, height = dH, worldPosition = serialize(oCF.Position) })
+			end
 			z = dR
 		end
 		if z < fullZ/2 - 0.01 then
@@ -788,19 +820,93 @@ function tools.build_room(args)
 		end
 	end
 
-	-- Doorway lists per face
-	local dws = { N={}, S={}, E={}, W={} }
+	-- Opening lists per face: doorways (sill=0) + windows (sill default 3, glass)
+	local ops = { N={}, S={}, E={}, W={} }
 	for _, dw in ipairs(args.doorways or {}) do
 		local face = (dw.wall or "N"):upper()
-		if dws[face] then table.insert(dws[face], dw) end
+		if ops[face] then
+			table.insert(ops[face], { offset = dw.offset, width = dw.width, height = dw.height, sill = 0, glass = false })
+		end
+	end
+	for _, w in ipairs(args.windows or {}) do
+		local face = (w.wall or "N"):upper()
+		if ops[face] then
+			table.insert(ops[face], { offset = w.offset, width = w.width or 4, height = w.height or 3, sill = w.sill or 3, glass = true })
+		end
 	end
 
 	-- North wall (Z- face), South wall (Z+ face): full width = sx + 2*wt
-	buildNS("WallNorth", CFrame.new(0, h/2, -(sz/2 + wt/2)), sx + 2*wt, dws.N)
-	buildNS("WallSouth", CFrame.new(0, h/2,   sz/2 + wt/2),  sx + 2*wt, dws.S)
+	buildNS("WallNorth", CFrame.new(0, h/2, -(sz/2 + wt/2)), sx + 2*wt, ops.N)
+	buildNS("WallSouth", CFrame.new(0, h/2,   sz/2 + wt/2),  sx + 2*wt, ops.S)
 	-- East wall (X+ face), West wall (X- face): interior depth only = sz
-	buildEW("WallEast",  CFrame.new( sx/2 + wt/2, h/2, 0), sz, dws.E)
-	buildEW("WallWest",  CFrame.new(-(sx/2 + wt/2), h/2, 0), sz, dws.W)
+	buildEW("WallEast",  CFrame.new( sx/2 + wt/2, h/2, 0), sz, ops.E)
+	buildEW("WallWest",  CFrame.new(-(sx/2 + wt/2), h/2, 0), sz, ops.W)
+
+	-- Baseboard trim along interior walls, segmented around floor-level openings
+	if args.trim ~= false then
+		local bt = 0.5   -- trim height
+		local bd = 0.18  -- protrusion into the room
+		local tCol = args.trimColor and parseColor(args.trimColor)
+			or Color3.new(wCol.R * 0.65, wCol.G * 0.65, wCol.B * 0.65)
+		local function trimSegments(list, fullLen)
+			local cuts = {}
+			for _, o in ipairs(list) do
+				if (o.sill or 0) <= 0.01 then
+					local off = o.offset or 0
+					local w   = o.width or 2
+					table.insert(cuts, { l = off - w/2, r = off + w/2 })
+				end
+			end
+			table.sort(cuts, function(a,b) return a.l < b.l end)
+			local segs, c = {}, -fullLen/2
+			for _, cut in ipairs(cuts) do
+				if cut.l > c + 0.05 then table.insert(segs, { a = c, b = cut.l }) end
+				c = math.max(c, cut.r)
+			end
+			if c < fullLen/2 - 0.05 then table.insert(segs, { a = c, b = fullLen/2 }) end
+			return segs
+		end
+		local idx = 0
+		for _, seg in ipairs(trimSegments(ops.N, sx)) do
+			idx += 1
+			rp("TrimN"..idx, CFrame.new((seg.a+seg.b)/2, bt/2, -(sz/2) + bd/2), Vector3.new(seg.b-seg.a, bt, bd), "SmoothPlastic", tCol)
+		end
+		for _, seg in ipairs(trimSegments(ops.S, sx)) do
+			idx += 1
+			rp("TrimS"..idx, CFrame.new((seg.a+seg.b)/2, bt/2, (sz/2) - bd/2), Vector3.new(seg.b-seg.a, bt, bd), "SmoothPlastic", tCol)
+		end
+		for _, seg in ipairs(trimSegments(ops.E, sz)) do
+			idx += 1
+			rp("TrimE"..idx, CFrame.new((sx/2) - bd/2, bt/2, (seg.a+seg.b)/2), Vector3.new(bd, bt, seg.b-seg.a), "SmoothPlastic", tCol)
+		end
+		for _, seg in ipairs(trimSegments(ops.W, sz)) do
+			idx += 1
+			rp("TrimW"..idx, CFrame.new(-(sx/2) + bd/2, bt/2, (seg.a+seg.b)/2), Vector3.new(bd, bt, seg.b-seg.a), "SmoothPlastic", tCol)
+		end
+	end
+
+	-- Auto ceiling lights: fixture grid scaled to room area, PointLight per fixture
+	local lightsBuilt = 0
+	if args.lights ~= false then
+		local lCol = args.lightColor and parseColor(args.lightColor) or Color3.fromRGB(255, 244, 222)
+		local nx = math.clamp(math.floor(sx/16 + 0.5), 1, 4)
+		local nz = math.clamp(math.floor(sz/16 + 0.5), 1, 4)
+		for ix = 1, nx do
+			for iz = 1, nz do
+				local px = -sx/2 + sx * (ix - 0.5) / nx
+				local pz = -sz/2 + sz * (iz - 0.5) / nz
+				local fixture = rp("CeilingLight_"..ix.."_"..iz, CFrame.new(px, h - 0.12, pz), Vector3.new(2, 0.24, 2), "Neon", lCol)
+				fixture.CanCollide = false
+				local pl = Instance.new("PointLight")
+				pl.Color = lCol
+				pl.Range = math.max(16, h * 1.9)
+				pl.Brightness = 0.85
+				pl.Shadows = false
+				pl.Parent = fixture
+				lightsBuilt += 1
+			end
+		end
+	end
 
 	wp("RobloxForge: build_room " .. model.Name)
 
@@ -808,6 +914,8 @@ function tools.build_room(args)
 		modelPath      = pathOf(model),
 		createdParts   = createdPaths,
 		doorwayMarkers = doorwayMarkers,
+		windowMarkers  = (#windowMarkers > 0) and windowMarkers or nil,
+		lights         = lightsBuilt,
 		persisted      = false,
 	}}
 end
@@ -1046,12 +1154,13 @@ function tools.populate_room(args)
 			table.insert(rejected, { index = i, reason = plan.rejected.reason })
 		else
 			local partArgs = {
-				parent   = args.roomModelPath,
-				name     = plan.name or ("Content_" .. i),
-				size     = plan.size,
-				color    = plan.color,
-				material = plan.material,
-				snap     = false,  -- positions already grid-aligned by composition.ts
+				parent       = args.roomModelPath,
+				name         = plan.name or ("Content_" .. i),
+				size         = plan.size,
+				color        = plan.color,
+				material     = plan.material,
+				transparency = plan.transparency,
+				snap         = false,  -- positions already grid-aligned by composition.ts
 			}
 			-- Decode 12-float CFrame into position
 			if plan.cframe and #plan.cframe >= 3 then
@@ -1226,88 +1335,277 @@ local function spawnLocalScript(parent, name, src)
 	return s
 end
 
+-- Emitters only render on BaseParts: reuse the parent if it is one, otherwise
+-- create an invisible anchored host part at the model pivot / given position.
+local function vfxHostPart(parent, name, pos)
+	if parent:IsA("BasePart") then return parent end
+	local part = Instance.new("Part")
+	part.Name = name
+	part.Size = Vector3.new(1, 1, 1)
+	part.Transparency = 1
+	part.Anchored = true
+	part.CanCollide = false
+	part.CanQuery = false
+	if pos then
+		part.Position = pos
+	elseif parent:IsA("Model") then
+		part.Position = parent:GetPivot().Position
+	end
+	part.Parent = parent
+	return part
+end
+
+local function seq(...)
+	local kps = {}
+	for _, kv in ipairs({ ... }) do
+		table.insert(kps, NumberSequenceKeypoint.new(kv[1], kv[2]))
+	end
+	return NumberSequence.new(kps)
+end
+
+local TEX_SMOKE   = "rbxasset://textures/particles/smoke_main.dds"
+local TEX_SPARKLE = "rbxasset://textures/particles/sparkles_main.dds"
+local TEX_FIRE    = "rbxasset://textures/particles/fire_main.dds"
+
+-- Layered fire: Fire core + ember emitter + smoke column + PointLight
 function tools.create_fire(args)
 	local parent = getByPath(args.parent or "Workspace")
 	if not parent then return { ok = false, error = "Parent not found: " .. tostring(args.parent) } end
+	local host = vfxHostPart(parent, args.name or "VFX_Fire", args.position and parseV3(args.position))
+	local s = args.size or 5
+
 	local fire = Instance.new("Fire")
-	fire.Name = args.name or "VFX_Fire"
+	fire.Name = "Core"
 	if args.color then local c = parseColor(args.color); if c then fire.Color = c end end
 	if args.secondaryColor then local c = parseColor(args.secondaryColor); if c then fire.SecondaryColor = c end end
-	if args.heat  then fire.Heat  = args.heat  end
-	if args.size  then fire.Size  = args.size  end
-	fire.Parent = parent
+	fire.Heat = args.heat or 9
+	fire.Size = s
+	fire.Parent = host
+
+	local embers = Instance.new("ParticleEmitter")
+	embers.Name = "Embers"
+	embers.Texture = TEX_SPARKLE
+	embers.Rate = s * 6
+	embers.Lifetime = NumberRange.new(0.6, 1.3)
+	embers.Speed = NumberRange.new(3, 7)
+	embers.SpreadAngle = Vector2.new(25, 25)
+	embers.Size = seq({0, 0.3}, {1, 0.05})
+	embers.Color = ColorSequence.new(Color3.fromRGB(255, 170, 60), Color3.fromRGB(200, 60, 20))
+	embers.LightEmission = 1
+	embers.Acceleration = Vector3.new(0, 6, 0)
+	embers.Parent = host
+
+	local smoke = Instance.new("ParticleEmitter")
+	smoke.Name = "SmokeColumn"
+	smoke.Texture = TEX_SMOKE
+	smoke.Rate = math.max(2, s * 1.5)
+	smoke.Lifetime = NumberRange.new(1.6, 2.6)
+	smoke.Speed = NumberRange.new(2, 3.5)
+	smoke.SpreadAngle = Vector2.new(12, 12)
+	smoke.Size = seq({0, s * 0.4}, {1, s * 1.0})
+	smoke.Transparency = seq({0, 0.55}, {1, 1})
+	smoke.Color = ColorSequence.new(Color3.fromRGB(70, 66, 62))
+	smoke.RotSpeed = NumberRange.new(-30, 30)
+	smoke.Parent = host
+
+	local light = Instance.new("PointLight")
+	light.Color = Color3.fromRGB(255, 160, 70)
+	light.Range = math.clamp(s * 3, 8, 60)
+	light.Brightness = 1.4
+	light.Shadows = false
+	light.Parent = host
+
 	wp("RobloxForge: create_fire")
-	return { ok = true, data = { path = pathOf(fire) } }
+	return { ok = true, data = { path = pathOf(host), layers = { "Core", "Embers", "SmokeColumn", "PointLight" } } }
 end
 
+-- Particle smoke with growth + fade curves (replaces flat legacy Smoke instance)
 function tools.create_smoke(args)
 	local parent = getByPath(args.parent or "Workspace")
 	if not parent then return { ok = false, error = "Parent not found: " .. tostring(args.parent) } end
-	local smoke = Instance.new("Smoke")
-	smoke.Name = args.name or "VFX_Smoke"
-	if args.color then local c = parseColor(args.color); if c then smoke.Color = c end end
-	if args.opacity   then smoke.Opacity   = args.opacity   end
-	if args.riseVelocity then smoke.RiseVelocity = args.riseVelocity end
-	if args.size   then smoke.Size = args.size end
-	smoke.Parent = parent
+	local host = vfxHostPart(parent, args.name or "VFX_Smoke", args.position and parseV3(args.position))
+	local s = args.size or 4
+
+	local smoke = Instance.new("ParticleEmitter")
+	smoke.Name = "Smoke"
+	smoke.Texture = TEX_SMOKE
+	smoke.Rate = args.rate or 12
+	smoke.Lifetime = NumberRange.new(1.8, 3.0)
+	smoke.Speed = NumberRange.new(args.riseVelocity or 2.5, (args.riseVelocity or 2.5) + 1.5)
+	smoke.SpreadAngle = Vector2.new(15, 15)
+	smoke.Size = seq({0, s * 0.5}, {1, s * 1.3})
+	smoke.Transparency = seq({0, math.clamp(1 - (args.opacity or 0.6), 0, 1)}, {1, 1})
+	local c = args.color and parseColor(args.color) or Color3.fromRGB(90, 88, 86)
+	smoke.Color = ColorSequence.new(c)
+	smoke.RotSpeed = NumberRange.new(-25, 25)
+	smoke.Acceleration = Vector3.new(0, 1.5, 0)
+	smoke.Parent = host
+
 	wp("RobloxForge: create_smoke")
-	return { ok = true, data = { path = pathOf(smoke) } }
+	return { ok = true, data = { path = pathOf(host) } }
 end
 
+-- Spark burst: glowing falling sparks with gravity
 function tools.create_sparks(args)
 	local parent = getByPath(args.parent or "Workspace")
 	if not parent then return { ok = false, error = "Parent not found: " .. tostring(args.parent) } end
-	local sparks = Instance.new("Sparkles")
-	sparks.Name = args.name or "VFX_Sparks"
-	if args.color then local c = parseColor(args.color); if c then sparks.SparkleColor = c end end
-	sparks.Parent = parent
+	local host = vfxHostPart(parent, args.name or "VFX_Sparks", args.position and parseV3(args.position))
+
+	local sparks = Instance.new("ParticleEmitter")
+	sparks.Name = "Sparks"
+	sparks.Texture = TEX_SPARKLE
+	sparks.Rate = args.rate or 25
+	sparks.Lifetime = NumberRange.new(0.4, 0.9)
+	sparks.Speed = NumberRange.new(8, 16)
+	sparks.SpreadAngle = Vector2.new(60, 60)
+	sparks.Size = seq({0, 0.25}, {1, 0.03})
+	local c = args.color and parseColor(args.color) or Color3.fromRGB(255, 220, 120)
+	sparks.Color = ColorSequence.new(c, Color3.fromRGB(255, 140, 40))
+	sparks.LightEmission = 1
+	sparks.Acceleration = Vector3.new(0, -40, 0)
+	sparks.Parent = host
+
 	wp("RobloxForge: create_sparks")
-	return { ok = true, data = { path = pathOf(sparks) } }
+	return { ok = true, data = { path = pathOf(host) } }
 end
 
+-- Multi-stage explosion: flash + fireball + smoke + debris + light pulse
 function tools.create_explosion_vfx(args)
 	local parent = getByPath(args.parent or "Workspace")
 	if not parent then return { ok = false, error = "Parent not found: " .. tostring(args.parent) } end
-	-- Fire burst emitter
-	local emitter = Instance.new("ParticleEmitter")
-	emitter.Name = "VFX_Explosion"
-	emitter.Rate = 0
-	emitter.Lifetime = NumberRange.new(0.3, 0.6)
-	emitter.Speed    = NumberRange.new(args.speed or 30)
-	emitter.Size     = NumberSequence.new({ NumberSequenceKeypoint.new(0, args.radius or 5), NumberSequenceKeypoint.new(1, 0) })
-	emitter.LightEmission = 0.8
-	emitter.Parent = parent
-	-- Emit burst
-	emitter:Emit(args.count or 40)
+	local host = vfxHostPart(parent, args.name or "VFX_Explosion", args.position and parseV3(args.position))
+	local r = args.radius or 6
+
+	local flash = Instance.new("ParticleEmitter")
+	flash.Name = "Flash"; flash.Rate = 0
+	flash.Lifetime = NumberRange.new(0.12, 0.2)
+	flash.Speed = NumberRange.new(0, 2)
+	flash.Size = seq({0, r * 1.3}, {1, r * 0.4})
+	flash.Transparency = seq({0, 0}, {1, 1})
+	flash.Color = ColorSequence.new(Color3.fromRGB(255, 245, 200))
+	flash.LightEmission = 1
+	flash.Parent = host
+
+	local fireball = Instance.new("ParticleEmitter")
+	fireball.Name = "Fireball"; fireball.Rate = 0
+	fireball.Texture = TEX_FIRE
+	fireball.Lifetime = NumberRange.new(0.4, 0.75)
+	fireball.Speed = NumberRange.new(r * 2.5, r * 4.5)
+	fireball.SpreadAngle = Vector2.new(180, 180)
+	fireball.Size = seq({0, r * 0.45}, {0.4, r * 0.8}, {1, 0.1})
+	fireball.Transparency = seq({0, 0.1}, {0.7, 0.4}, {1, 1})
+	fireball.Color = ColorSequence.new(Color3.fromRGB(255, 180, 70), Color3.fromRGB(160, 40, 15))
+	fireball.LightEmission = 0.8
+	fireball.Parent = host
+
+	local smoke = Instance.new("ParticleEmitter")
+	smoke.Name = "Aftermath"; smoke.Rate = 0
+	smoke.Texture = TEX_SMOKE
+	smoke.Lifetime = NumberRange.new(1.4, 2.6)
+	smoke.Speed = NumberRange.new(r * 1.2, r * 2.2)
+	smoke.SpreadAngle = Vector2.new(180, 180)
+	smoke.Size = seq({0, r * 0.6}, {1, r * 1.6})
+	smoke.Transparency = seq({0, 0.35}, {1, 1})
+	smoke.Color = ColorSequence.new(Color3.fromRGB(60, 56, 52), Color3.fromRGB(30, 28, 26))
+	smoke.RotSpeed = NumberRange.new(-40, 40)
+	smoke.Parent = host
+
+	local debris = Instance.new("ParticleEmitter")
+	debris.Name = "Debris"; debris.Rate = 0
+	debris.Lifetime = NumberRange.new(0.8, 1.5)
+	debris.Speed = NumberRange.new(r * 3, r * 5)
+	debris.SpreadAngle = Vector2.new(70, 70)
+	debris.Size = seq({0, 0.35}, {1, 0.15})
+	debris.Color = ColorSequence.new(Color3.fromRGB(50, 46, 42))
+	debris.Acceleration = Vector3.new(0, -60, 0)
+	debris.Parent = host
+
+	local light = Instance.new("PointLight")
+	light.Color = Color3.fromRGB(255, 190, 100)
+	light.Range = math.clamp(r * 4, 12, 60)
+	light.Brightness = 4
+	light.Shadows = false
+	light.Parent = host
+
+	if args.emit ~= false then
+		flash:Emit(2)
+		fireball:Emit(args.count or 45)
+		smoke:Emit(math.floor((args.count or 45) * 0.6))
+		debris:Emit(math.floor((args.count or 45) * 0.5))
+		task.spawn(function()
+			local t0 = os.clock()
+			while os.clock() - t0 < 0.5 do
+				light.Brightness = 4 * (1 - (os.clock() - t0) / 0.5)
+				task.wait()
+			end
+			light.Brightness = 0
+		end)
+	end
+
 	wp("RobloxForge: create_explosion_vfx")
-	return { ok = true, data = { path = pathOf(emitter) } }
+	return { ok = true, data = { path = pathOf(host), layers = { "Flash", "Fireball", "Aftermath", "Debris" } } }
+end
+
+-- Weather volume: emitters need a BasePart, so rain/snow spawn from a wide
+-- invisible sky volume (the old camera-parented emitters never rendered).
+local function weatherVolume(name, area, height, center)
+	local part = Instance.new("Part")
+	part.Name = name
+	part.Size = Vector3.new(area, 1, area)
+	part.Position = Vector3.new(center.X, height, center.Z)
+	part.Transparency = 1
+	part.Anchored = true
+	part.CanCollide = false
+	part.CanQuery = false
+	part.Parent = workspace
+	return part
 end
 
 function tools.create_rain(args)
-	local camera = workspace.CurrentCamera
-	local emitter = Instance.new("ParticleEmitter")
-	emitter.Name = "VFX_Rain"
-	emitter.Rate = args.rate or 200
-	emitter.Lifetime = NumberRange.new(1, 2)
-	emitter.Speed    = NumberRange.new(args.speed or 40)
-	emitter.SpreadAngle = Vector2.new(5, 5)
-	emitter.Parent = camera
+	local area   = args.area or 200
+	local height = args.height or 80
+	local center = (args.center and parseV3(args.center)) or Vector3.new(0, 0, 0)
+	local vol = weatherVolume(args.name or "VFX_RainVolume", area, height, center)
+
+	local rain = Instance.new("ParticleEmitter")
+	rain.Name = "Rain"
+	rain.Rate = args.rate or 900
+	rain.Lifetime = NumberRange.new(1.6, 2.2)
+	rain.Speed = NumberRange.new(args.speed or 55, (args.speed or 55) + 12)
+	rain.EmissionDirection = Enum.NormalId.Bottom
+	rain.Orientation = Enum.ParticleOrientation.VelocityParallel
+	rain.Size = seq({0, 0.14}, {1, 0.14})
+	rain.Transparency = seq({0, 0.35}, {1, 0.55})
+	rain.Color = ColorSequence.new(Color3.fromRGB(175, 195, 225))
+	rain.LightInfluence = 1
+	rain.Parent = vol
+
 	wp("RobloxForge: create_rain")
-	return { ok = true, data = { path = pathOf(emitter) } }
+	return { ok = true, data = { path = pathOf(vol) } }
 end
 
 function tools.create_snow(args)
-	local camera = workspace.CurrentCamera
-	local emitter = Instance.new("ParticleEmitter")
-	emitter.Name = "VFX_Snow"
-	emitter.Rate = args.rate or 80
-	emitter.Lifetime = NumberRange.new(3, 5)
-	emitter.Speed    = NumberRange.new(args.speed or 5)
-	emitter.SpreadAngle = Vector2.new(30, 30)
-	emitter.Color = ColorSequence.new(Color3.new(1, 1, 1))
-	emitter.Parent = camera
+	local area   = args.area or 200
+	local height = args.height or 70
+	local center = (args.center and parseV3(args.center)) or Vector3.new(0, 0, 0)
+	local vol = weatherVolume(args.name or "VFX_SnowVolume", area, height, center)
+
+	local snow = Instance.new("ParticleEmitter")
+	snow.Name = "Snow"
+	snow.Rate = args.rate or 300
+	snow.Lifetime = NumberRange.new(8, 14)
+	snow.Speed = NumberRange.new(args.speed or 4, (args.speed or 4) + 3)
+	snow.EmissionDirection = Enum.NormalId.Bottom
+	snow.SpreadAngle = Vector2.new(20, 20)
+	snow.Size = seq({0, 0.3}, {1, 0.22})
+	snow.Transparency = seq({0, 0.15}, {1, 0.4})
+	snow.Color = ColorSequence.new(Color3.new(1, 1, 1))
+	snow.RotSpeed = NumberRange.new(-40, 40)
+	snow.LightInfluence = 1
+	snow.Parent = vol
+
 	wp("RobloxForge: create_snow")
-	return { ok = true, data = { path = pathOf(emitter) } }
+	return { ok = true, data = { path = pathOf(vol) } }
 end
 
 function tools.camera_shake(args)
@@ -1393,29 +1691,54 @@ end
 function tools.animate_door(args)
 	local door = getByPath(args.target)
 	if not door then return { ok = false, error = "Door not found: " .. tostring(args.target) } end
-	local openAngle = args.openAngle or 90
-	local dur       = args.duration  or 0.5
-	local axis      = args.axis      or "Y"
-	local src = string.format([[
+	local openAngle = args.openAngle or 110
+	local dur       = args.duration  or 0.6
+	local mode      = (args.mode or "hinge"):lower()    -- "hinge" | "slide"
+	local hinge     = (args.hinge or "left"):lower()    -- hinge edge / slide direction
+	local easing    = args.easing or "Quart"
+	local hingeSign = (hinge == "right") and 1 or -1
+	local src
+	if mode == "slide" then
+		src = string.format([[
+local TweenService = game:GetService("TweenService")
+local door = script.Parent
+local prompt = Instance.new("ProximityPrompt", door)
+prompt.ActionText = "Open"
+local open = false
+local baseCF  = door.CFrame
+local openCF  = baseCF * CFrame.new(%d * (door.Size.X + 0.1), 0, 0)
+local ti = TweenInfo.new(%f, Enum.EasingStyle.%s, Enum.EasingDirection.InOut)
+prompt.Triggered:Connect(function()
+	open = not open
+	TweenService:Create(door, ti, {CFrame = open and openCF or baseCF}):Play()
+	prompt.ActionText = open and "Close" or "Open"
+end)
+]], hingeSign, dur, easing)
+	else
+		-- Rotate around the hinge EDGE, not the part center: translate to the
+		-- hinge, rotate, translate back.
+		src = string.format([[
 local TweenService = game:GetService("TweenService")
 local door = script.Parent
 local prompt = Instance.new("ProximityPrompt", door)
 prompt.ActionText = "Open"
 local open = false
 local baseCF = door.CFrame
-local rotOpen  = baseCF * CFrame.Angles(0, math.rad(%d), 0)
-local rotClose = baseCF
-local ti = TweenInfo.new(%f, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+local hw = door.Size.X / 2
+local s  = %d
+local openCF = baseCF * CFrame.new(s * hw, 0, 0) * CFrame.Angles(0, math.rad(%d * -s), 0) * CFrame.new(-s * hw, 0, 0)
+local ti = TweenInfo.new(%f, Enum.EasingStyle.%s, Enum.EasingDirection.Out)
 prompt.Triggered:Connect(function()
 	open = not open
-	TweenService:Create(door, ti, {CFrame = open and rotOpen or rotClose}):Play()
+	TweenService:Create(door, ti, {CFrame = open and openCF or baseCF}):Play()
 	prompt.ActionText = open and "Close" or "Open"
 end)
-]], openAngle, dur)
+]], hingeSign, openAngle, dur, easing)
+	end
 	local s = Instance.new("LocalScript")
 	s.Name = "AnimDoor"; s.Source = src; s.Parent = door
 	wp("RobloxForge: animate_door")
-	return { ok = true, data = { path = pathOf(s) } }
+	return { ok = true, data = { path = pathOf(s), mode = mode, hinge = hinge } }
 end
 
 function tools.animate_elevator(args)
@@ -1432,13 +1755,13 @@ prompt.ActionText = "Call Elevator"
 local posA = Vector3.new(%f, %f, %f)
 local posB = Vector3.new(%f, %f, %f)
 local atA = true
-local ti = TweenInfo.new(%f, Enum.EasingStyle.Quad, Enum.EasingDirection.InOut)
+local ti = TweenInfo.new(%f, Enum.EasingStyle.%s, Enum.EasingDirection.InOut)
 prompt.Triggered:Connect(function()
 	atA = not atA
 	TweenService:Create(elevator, ti, {Position = atA and posA or posB}):Play()
 end)
 ]], floorA.x or 0, floorA.y or 0, floorA.z or 0,
-    floorB.x or 0, floorB.y or 0, floorB.z or 0, dur)
+    floorB.x or 0, floorB.y or 0, floorB.z or 0, dur, args.easing or "Quint")
 	local s = Instance.new("LocalScript")
 	s.Name = "AnimElevator"; s.Source = src; s.Parent = elevator
 	wp("RobloxForge: animate_elevator")
@@ -1475,40 +1798,84 @@ function tools.animate_npc(args)
 end
 
 function tools.create_cutscene(args)
-	-- Generates a LocalScript that tweens camera through waypoints
+	-- Generates a LocalScript: optional black fade in/out, camera tweened
+	-- through beats with per-beat easing; beats may aim via lookAt or rotation.
 	local beats = args.beats or {}
+	if #beats < 1 then return { ok = false, error = "beats must contain at least one waypoint" } end
 	local parent = getByPath(args.parent or "Workspace")
 	if not parent then return { ok = false, error = "Parent not found: " .. tostring(args.parent) } end
 	local beatsStr = "{"
 	for i, b in ipairs(beats) do
 		local p = b.position or {}
-		local r = b.rotation or {}
-		beatsStr = beatsStr .. string.format(
-			"{time=%f,px=%f,py=%f,pz=%f,rx=%f,ry=%f,rz=%f},",
-			b.time or (i-1)*2,
-			p.x or 0, p.y or 10, p.z or 0,
-			r.x or 0, r.y or 0,  r.z or 0
-		)
+		local entry = string.format("{time=%f,px=%f,py=%f,pz=%f",
+			b.time or (i-1)*2, p.x or 0, p.y or 10, p.z or 0)
+		if b.lookAt then
+			entry = entry .. string.format(",lx=%f,ly=%f,lz=%f",
+				b.lookAt.x or 0, b.lookAt.y or 0, b.lookAt.z or 0)
+		else
+			local r = b.rotation or {}
+			entry = entry .. string.format(",rx=%f,ry=%f,rz=%f", r.x or 0, r.y or 0, r.z or 0)
+		end
+		if b.easing then entry = entry .. string.format(",easing=%q", b.easing) end
+		beatsStr = beatsStr .. entry .. "},"
 	end
 	beatsStr = beatsStr .. "}"
+	local fadeFlag = (args.fade ~= false) and "true" or "false"
 	local src = string.format([[
 local TweenService = game:GetService("TweenService")
+local Players = game:GetService("Players")
 local cam = workspace.CurrentCamera
-cam.CameraType = Enum.CameraType.Scriptable
 local beats = %s
-for i, b in ipairs(beats) do
-	local targetCF = CFrame.new(b.px, b.py, b.pz) * CFrame.Angles(math.rad(b.rx), math.rad(b.ry), math.rad(b.rz))
-	local dur = i < #beats and (beats[i+1].time - b.time) or 1
-	TweenService:Create(cam, TweenInfo.new(dur, Enum.EasingStyle.Sine), {CFrame = targetCF}):Play()
-	task.wait(dur)
+local fade  = %s
+local player = Players.LocalPlayer
+local gui, black
+local function setFade(target, dur)
+	if not black then return end
+	TweenService:Create(black, TweenInfo.new(dur, Enum.EasingStyle.Sine), {BackgroundTransparency = target}):Play()
+	task.wait(dur + 0.05)
 end
-cam.CameraType = Enum.CameraType.Custom
+if fade and player then
+	gui = Instance.new("ScreenGui")
+	gui.Name = "CutsceneFade"; gui.IgnoreGuiInset = true; gui.DisplayOrder = 999
+	gui.Parent = player:WaitForChild("PlayerGui")
+	black = Instance.new("Frame")
+	black.Size = UDim2.fromScale(1, 1)
+	black.BackgroundColor3 = Color3.new(0, 0, 0)
+	black.BackgroundTransparency = 1
+	black.BorderSizePixel = 0
+	black.Parent = gui
+	setFade(0, 0.4)
+end
+local prevType = cam.CameraType
+cam.CameraType = Enum.CameraType.Scriptable
+local function beatCF(b)
+	local pos = Vector3.new(b.px, b.py, b.pz)
+	if b.lx ~= nil then return CFrame.lookAt(pos, Vector3.new(b.lx, b.ly, b.lz)) end
+	return CFrame.new(pos) * CFrame.Angles(math.rad(b.rx or 0), math.rad(b.ry or 0), math.rad(b.rz or 0))
+end
+cam.CFrame = beatCF(beats[1])
+if fade then setFade(1, 0.4) end
+for i = 2, #beats do
+	local b = beats[i]
+	local dur = math.max(0.05, b.time - beats[i-1].time)
+	local style = Enum.EasingStyle.Sine
+	pcall(function() if b.easing then style = Enum.EasingStyle[b.easing] end end)
+	local tw = TweenService:Create(cam, TweenInfo.new(dur, style, Enum.EasingDirection.InOut), {CFrame = beatCF(b)})
+	tw:Play()
+	tw.Completed:Wait()
+end
+if fade then setFade(0, 0.4) end
+cam.CameraType = prevType
+if fade then
+	setFade(1, 0.4)
+	if gui then gui:Destroy() end
+end
 script:Destroy()
-]], beatsStr)
+]], beatsStr, fadeFlag)
 	local s = Instance.new("LocalScript")
-	s.Name = "Cutscene"; s.Source = src; s.Parent = parent
+	s.Name = args.name or "Cutscene"; s.Source = src; s.Parent = parent
 	wp("RobloxForge: create_cutscene")
-	return { ok = true, data = { path = pathOf(s), beatCount = #beats } }
+	return { ok = true, data = { path = pathOf(s), beatCount = #beats, fade = args.fade ~= false } }
 end
 
 -- ─── UI Builder ──────────────────────────────────────────────────────────────
@@ -1560,8 +1927,53 @@ local function buildGuiNode(parent, node)
 		ll.FillDirection = Enum.FillDirection[node.listLayout.fillDirection or "Vertical"]
 		ll.HorizontalAlignment = Enum.HorizontalAlignment[node.listLayout.horizontalAlignment or "Center"]
 		ll.VerticalAlignment   = Enum.VerticalAlignment[node.listLayout.verticalAlignment or "Top"]
+		ll.SortOrder = Enum.SortOrder.LayoutOrder
 		if node.listLayout.padding then ll.Padding = UDim.new(0, node.listLayout.padding) end
 	end
+	-- UIGridLayout (cells in scale units)
+	if node.gridLayout then
+		local gl = Instance.new("UIGridLayout", inst)
+		local cs = node.gridLayout.cellSize or { 0.1, 1 }
+		gl.CellSize = UDim2.fromScale(cs[1], cs[2])
+		if node.gridLayout.cellPadding then
+			gl.CellPadding = UDim2.new(0, node.gridLayout.cellPadding, 0, node.gridLayout.cellPadding)
+		end
+		gl.SortOrder = Enum.SortOrder.LayoutOrder
+	end
+	-- UIStroke
+	if node.stroke then
+		local st = Instance.new("UIStroke", inst)
+		local c = node.stroke.color and parseColor(node.stroke.color)
+		if c then st.Color = c end
+		st.Thickness = node.stroke.thickness or 1
+		if node.stroke.transparency then st.Transparency = node.stroke.transparency end
+		st.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+	end
+	-- UIGradient (vertical by default)
+	if node.gradient then
+		local gr = Instance.new("UIGradient", inst)
+		local c1 = parseColor(node.gradient.from) or Color3.new(1, 1, 1)
+		local c2 = parseColor(node.gradient.to)   or Color3.new(0.8, 0.8, 0.8)
+		gr.Color = ColorSequence.new(c1, c2)
+		gr.Rotation = node.gradient.rotation or 90
+	end
+	-- UIAspectRatioConstraint
+	if node.aspectRatio then
+		local ar = Instance.new("UIAspectRatioConstraint", inst)
+		ar.AspectRatio = node.aspectRatio
+	end
+	-- Text alignment / rich text
+	if node.textXAlignment then pcall(function() inst.TextXAlignment = Enum.TextXAlignment[node.textXAlignment] end) end
+	if node.textYAlignment then pcall(function() inst.TextYAlignment = Enum.TextYAlignment[node.textYAlignment] end) end
+	if node.richText ~= nil then pcall(function() inst.RichText = node.richText end) end
+	if node.autoButtonColor ~= nil then pcall(function() inst.AutoButtonColor = node.autoButtonColor end) end
+	if node.rotation then pcall(function() inst.Rotation = node.rotation end) end
+	-- ScrollingFrame niceties
+	if node.scrollBarThickness then pcall(function() inst.ScrollBarThickness = node.scrollBarThickness end) end
+	if node.automaticCanvasSize then pcall(function()
+		inst.AutomaticCanvasSize = Enum.AutomaticSize[node.automaticCanvasSize]
+		inst.CanvasSize = UDim2.new(0, 0, 0, 0)
+	end) end
 	inst.Parent = parent
 	-- Recurse children
 	if node.children then

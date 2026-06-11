@@ -26,7 +26,15 @@ assert("HealthBar has Fill child",     !!healthBar?.children?.find(c => c.name =
 const menu = getUiPreset("menu", { title: "Prison Tycoon", buttons: ["Play", "Quit"] });
 const btnsContainer = (menu.children ?? []).find(c => c.name === "Buttons");
 assert("menu buttons count matches",   btnsContainer?.children?.length === 2);
-const titleNode = (menu.children ?? []).find(c => c.name === "Title");
+function findNode(node: ReturnType<typeof getUiPreset>, name: string): ReturnType<typeof getUiPreset> | undefined {
+  if (node.name === name) return node;
+  for (const c of node.children ?? []) {
+    const hit = findNode(c, name);
+    if (hit) return hit;
+  }
+  return undefined;
+}
+const titleNode = findNode(menu, "Title");
 assert("menu title text is set",       titleNode?.text === "Prison Tycoon");
 
 // Shop has item count

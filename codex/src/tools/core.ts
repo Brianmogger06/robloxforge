@@ -21,6 +21,7 @@ import { SCALE } from "../build/scale.js";
 import { type PaletteRole, getSessionColor, setSessionPalette, getSessionPalette, clearSessionPalette } from "../build/palette_session.js";
 import { planRoomContents, MIN_ROOM_DIM, type RoomContent, type RoomSpec } from "../build/composition.js";
 import { buildFacadeDefs, isFacadeGroup, resolveFacade, resolveBatchCmd } from "./facade.js";
+import { getAssembly, expandPlans, contentsFromTags, listPropTags } from "../build/props.js";
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -282,9 +283,9 @@ export const TOOL_DEFS = [
   {
     name: "build_room",
     description:
-      "Build a complete room: floor + 4 walls + ceiling + optional doorway openings. " +
-      "Returns model path, all part paths, and doorway world positions. " +
-      "Doorways split the wall into segments to create walkable openings.",
+      "Build a complete room: floor + 4 walls + ceiling + optional doorway/window openings, " +
+      "with auto ceiling lights and baseboard trim (both default on). " +
+      "Returns model path, all part paths, and doorway/window world positions.",
     inputSchema: {
       type: "object" as const,
       properties: {
@@ -310,6 +311,17 @@ export const TOOL_DEFS = [
             description: `{ wall: 'N'|'S'|'E'|'W', width (default ${SCALE.door.width}), height (default ${SCALE.door.height}), offset? (from wall center) }`,
           },
         },
+        windows: {
+          type: "array",
+          items: {
+            type: "object",
+            description: "{ wall: 'N'|'S'|'E'|'W', width (default 4), height (default 3), sill (default 3), offset? (from wall center) } — glass pane openings",
+          },
+        },
+        lights: { type: "boolean", description: "Auto-place ceiling light fixtures with PointLights, count scaled to area (default true)" },
+        lightColor: { description: "Light color { r,g,b } / hex / palette name (default warm white)" },
+        trim: { type: "boolean", description: "Baseboard trim strips along interior walls, segmented around doorways (default true)" },
+        trimColor: { description: "Trim color (default darkened wall color)" },
         snap: { type: "boolean", description: `Snap room origin to world grid (default true, tile=${SCALE.tile} studs)` },
         tile: { type: "number", description: `Grid tile size in studs (default ${SCALE.tile})` },
         clearance: { type: "boolean", description: "Check child placement for overlaps and report rejected parts (default true)" },
@@ -401,7 +413,8 @@ export const TOOL_DEFS = [
     description:
       `Place a set of objects inside an existing room with structured composition: ` +
       `focal hero in center, ${SCALE.humanScale}-stud perimeter walkway, props on ${SCALE.tile}-stud grid. ` +
-      `Requires the room model path and interior size.`,
+      `Prefer 'tag' contents — each tag expands into a detailed multi-part furniture assembly ` +
+      `(size/kind auto-resolved). Requires the room model path and interior size.`,
     inputSchema: {
       type: "object" as const,
       properties: {
@@ -418,7 +431,10 @@ export const TOOL_DEFS = [
           type: "array",
           items: {
             type: "object",
-            description: `{ kind: 'focal'|'prop'|'fixture', size: {x,y,z}, preferredZone?: 'center'|'perimeter'|'corner', color?, material?, name? }`,
+            description:
+              `{ tag?, kind?: 'focal'|'prop'|'fixture', size?: {x,y,z}, preferredZone?, color?, material?, name? } — ` +
+              `with a known 'tag' the assembly's footprint/kind are used and the prop is built from multiple detailed parts. ` +
+              `Known tags: ${listPropTags().join(", ")}.`,
           },
         },
         tile: { type: "number", description: `Grid tile size (default ${SCALE.tile})` },
@@ -797,19 +813,21 @@ export const TOOL_DEFS = [
         floorplan: { type: "object", description: "Floorplan JSON from generate_floorplan" },
         parentPath: { type: "string", description: "Parent model path (default: Workspace)" },
         yOffset: { type: "number", description: "Y offset for floor origin (default: 0)" },
+        populate: { type: "boolean", description: "Auto-furnish each room from its preset's prop assemblies (default true)" },
       },
       required: ["floorplan"],
     },
   },
   {
     name: "build_building",
-    description: "One-shot: generate floorplan for the given kind then build it in Studio.",
+    description: "One-shot: generate floorplan for the given kind then build it in Studio, furnished room by room.",
     inputSchema: {
       type: "object" as const,
       properties: {
         kind: { type: "string", description: "Building type: prison | school" },
         parentPath: { type: "string" },
         yOffset: { type: "number" },
+        populate: { type: "boolean", description: "Auto-furnish each room from its preset's prop assemblies (default true)" },
       },
       required: ["kind"],
     },
@@ -874,59 +892,75 @@ export const TOOL_DEFS = [
   },
   {
     name: "create_fire",
-    description: "Attach a Fire effect to a part.",
+    description: "Layered fire: Fire core + glowing ember particles + smoke column + warm PointLight, hosted on the part (or an invisible host at a Model's pivot / given position).",
     inputSchema: {
       type: "object" as const,
       properties: {
         parent: { type: "string" }, name: { type: "string" },
         color: {}, secondaryColor: {}, heat: { type: "number" }, size: { type: "number" },
+        position: { type: "object", description: "{x,y,z} world position for the host part when parent is not a BasePart" },
       },
     },
   },
   {
     name: "create_smoke",
-    description: "Attach a Smoke effect to a part.",
+    description: "Particle smoke with growth and fade curves (textured ParticleEmitter, not the flat legacy Smoke).",
     inputSchema: {
       type: "object" as const,
       properties: {
         parent: { type: "string" }, name: { type: "string" },
         color: {}, opacity: { type: "number" }, riseVelocity: { type: "number" }, size: { type: "number" },
+        rate: { type: "number" }, position: { type: "object", description: "{x,y,z} host position when parent is not a BasePart" },
       },
     },
   },
   {
     name: "create_sparks",
-    description: "Attach a Sparkles effect to a part.",
+    description: "Glowing spark burst with gravity arc (textured, LightEmission 1).",
     inputSchema: {
       type: "object" as const,
-      properties: { parent: { type: "string" }, name: { type: "string" }, color: {} },
+      properties: {
+        parent: { type: "string" }, name: { type: "string" }, color: {},
+        rate: { type: "number" }, position: { type: "object" },
+      },
     },
   },
   {
     name: "create_explosion_vfx",
-    description: "Emit a burst particle explosion on a part.",
+    description: "Multi-stage explosion: white flash + textured fireball + expanding smoke + falling debris + decaying light pulse. Fires once on creation (emit:false to skip).",
     inputSchema: {
       type: "object" as const,
       properties: {
         parent: { type: "string" }, name: { type: "string" },
-        radius: { type: "number" }, speed: { type: "number" }, count: { type: "number" },
+        radius: { type: "number" }, count: { type: "number" },
+        emit: { type: "boolean" }, position: { type: "object" },
       },
     },
   },
   {
     name: "create_rain",
-    description: "Attach a rain particle system to the current camera.",
+    description: "Rain falling from an invisible sky volume over an area (velocity-stretched streak particles).",
     inputSchema: {
       type: "object" as const,
-      properties: { rate: { type: "number" }, speed: { type: "number" } },
+      properties: {
+        rate: { type: "number" }, speed: { type: "number" },
+        area: { type: "number", description: "Coverage square edge in studs (default 200)" },
+        height: { type: "number", description: "Emitter altitude (default 80)" },
+        center: { type: "object", description: "{x,y,z} area center (default origin)" },
+        name: { type: "string" },
+      },
     },
   },
   {
     name: "create_snow",
-    description: "Attach a snow particle system to the current camera.",
+    description: "Snow drifting down from an invisible sky volume over an area (slow tumbling flakes).",
     inputSchema: {
       type: "object" as const,
-      properties: { rate: { type: "number" }, speed: { type: "number" } },
+      properties: {
+        rate: { type: "number" }, speed: { type: "number" },
+        area: { type: "number" }, height: { type: "number" },
+        center: { type: "object" }, name: { type: "string" },
+      },
     },
   },
   {
@@ -964,13 +998,16 @@ export const TOOL_DEFS = [
   },
   {
     name: "animate_door",
-    description: "Inject a ProximityPrompt + TweenService LocalScript onto a door part so players can open/close it.",
+    description: "Inject a ProximityPrompt + TweenService LocalScript onto a door part. Hinge mode rotates around the door's edge (real hinge), slide mode slides it sideways.",
     inputSchema: {
       type: "object" as const,
       properties: {
         target: { type: "string", description: "Dot-path to the door part" },
-        openAngle: { type: "number", description: "Rotation angle in degrees (default 90)" },
-        duration:  { type: "number", description: "Tween duration in seconds (default 0.5)" },
+        mode: { type: "string", description: "'hinge' (rotate around edge, default) or 'slide'" },
+        hinge: { type: "string", description: "'left' (default) or 'right' — hinge edge / slide direction" },
+        openAngle: { type: "number", description: "Hinge rotation in degrees (default 110)" },
+        duration:  { type: "number", description: "Tween duration in seconds (default 0.6)" },
+        easing: { type: "string", description: "EasingStyle name (default Quart)" },
       },
       required: ["target"],
     },
@@ -985,6 +1022,7 @@ export const TOOL_DEFS = [
         floorA:   { type: "object", description: "{ x, y, z } bottom floor position" },
         floorB:   { type: "object", description: "{ x, y, z } top floor position" },
         duration: { type: "number", description: "Travel time in seconds (default 2)" },
+        easing: { type: "string", description: "EasingStyle name (default Quint)" },
       },
       required: ["target"],
     },
@@ -1004,17 +1042,20 @@ export const TOOL_DEFS = [
   },
   {
     name: "create_cutscene",
-    description: "Generate a LocalScript that moves the camera through a list of {time, position, rotation} beats.",
+    description: "Generate a cinematic camera LocalScript: black fade in/out, smooth tweens through beats, camera restored at the end. Beats aim with lookAt or explicit rotation.",
     inputSchema: {
       type: "object" as const,
       properties: {
         parent: { type: "string" },
+        name: { type: "string" },
+        fade: { type: "boolean", description: "Black fade transitions at start/end (default true)" },
         beats: {
           type: "array",
-          description: "Array of {time, position:{x,y,z}, rotation:{x,y,z}} camera keyframes",
+          description: "Array of { time, position:{x,y,z}, lookAt?:{x,y,z}, rotation?:{x,y,z}, easing?: EasingStyle name } camera keyframes",
           items: { type: "object" },
         },
       },
+      required: ["beats"],
     },
   },
   {
@@ -1413,7 +1454,15 @@ export function registerCoreTools(server: Server, bridge: HttpBridge, config: Co
           floorPosition: { x: Number(fcPos["x"] ?? 0), y: Number(fcPos["y"] ?? 0), z: Number(fcPos["z"] ?? 0) },
           sizeXZ: toolArgs["sizeXZ"] as { x: number; z: number },
         };
-        const plans = planRoomContents(room, toolArgs["contents"] as RoomContent[], (toolArgs["tile"] as number | undefined) ?? SCALE.tile);
+        // Resolve prop-assembly tags: tagged contents get footprint/kind from the
+        // assembly library, and placed plans expand into multi-part furniture.
+        const rawContents = (toolArgs["contents"] as Array<Partial<RoomContent> & { tag?: string }>) ?? [];
+        const contents: RoomContent[] = rawContents.map(c => {
+          const asm = c.tag ? getAssembly(c.tag) : undefined;
+          if (asm) return { ...c, kind: c.kind ?? asm.kind, size: c.size ?? asm.footprint } as RoomContent;
+          return c as RoomContent;
+        });
+        const plans = expandPlans(planRoomContents(room, contents, (toolArgs["tile"] as number | undefined) ?? SCALE.tile));
         return fmt(await bridge.send("populate_room", { roomModelPath: toolArgs["roomModelPath"], plans }), "populate_room");
       } catch (e) { return er(`populate_room error: ${String(e)}`); }
     }
@@ -1506,6 +1555,22 @@ export function registerCoreTools(server: Server, bridge: HttpBridge, config: Co
 
           const result = await bridge.send("build_room", roomArgs);
           if (result.ok) built.push(r.id);
+
+          // Auto-furnish from the room preset's prop tags (multi-part assemblies).
+          if (result.ok && toolArgs["populate"] !== false) {
+            const preset = getRoomPreset(r.kind as Parameters<typeof getRoomPreset>[0]);
+            const modelPath = (result.data as { modelPath?: string } | undefined)?.modelPath;
+            if (preset && preset.propTags.length > 0 && modelPath) {
+              const furnContents = contentsFromTags(preset.propTags, r.w * r.l) as RoomContent[];
+              const furnPlans = expandPlans(planRoomContents(
+                { floorPosition: { x: r.x, y: yOffset, z: r.z }, sizeXZ: { x: r.w, z: r.l } },
+                furnContents
+              )).filter(pl => !pl.rejected);
+              if (furnPlans.length > 0) {
+                await bridge.send("populate_room", { roomModelPath: modelPath, plans: furnPlans });
+              }
+            }
+          }
         }
 
         return ok({ kind: fp.kind, roomsBuilt: built.length, rooms: built, floorplan: fp });
