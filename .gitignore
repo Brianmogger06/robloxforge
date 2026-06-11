@@ -1,0 +1,9 @@
+# Agent/tooling state — never publish
+.claude/
+.serena/
+.graphify_python
+graphify-out/
+
+# Node
+node_modules/
+dist/
